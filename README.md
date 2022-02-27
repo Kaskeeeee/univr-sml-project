@@ -6,13 +6,9 @@ Foundations of Programming Languages course project
 
 To use functions of the project you shall type the following commands:
 
-1.
-
 ```bash
 $ mosml
 ```
-
-2.
 
 ```bash
 - use "lang.sml";
