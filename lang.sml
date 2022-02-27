@@ -16,10 +16,9 @@ datatype langType =  mInt
                     | mBool
                     | mProc
                     | mRef of langType
-                    | mFun of langType * langType
 
 type store = (loc * langType) list
-datatype oper = plus | gt
+datatype oper = plus | ge
 
 (* Lang structure *)
 datatype exp =
@@ -32,9 +31,6 @@ datatype exp =
     |   Seq of exp * exp
     |   While of exp * exp
     |   Deref of loc
-    |   Var of var
-    |   Fn of var * langType * exp
-    |   App of exp * exp
     |   Choice of exp * exp
     |   Par of exp * exp
     |   Await of exp * exp
@@ -43,8 +39,6 @@ datatype exp =
 (* Returns whether or not the passed argument is a value *)
 fun value (Integer n)     = true
   | value (Boolean b)     = true
-  | value (Fn (v, t, e))  = true
-  | value (Var x)         = true
   | value (Skip)          = true
   | value _               = false
 
@@ -63,33 +57,14 @@ fun update'  front [] (l,n) = NONE
 
 fun update (s, (l,n)) = update' [] s (l,n)
 
-(* Applies substitution of value in var *)
-fun substitute var value (Boolean b)      = Boolean b
-  | substitute var value (Integer n)      = Integer n
-  | substitute var value Skip             = Skip
-  | substitute var value (Var x)          = if var = x then value else (Var x)
-  | substitute var value (Fn(x, t, e))    = Fn(x, t, substitute var value e)
-  | substitute var value (App(f, e))      = App(substitute var value f, substitute var value e)
-  | substitute var value (If(g, t, f))    = If(substitute var value g, substitute var value t, substitute var value f)
-  | substitute var value (Assign(l, e))   = Assign(l, substitute var value e)
-  | substitute var value (While(g, e))    = While(substitute var value g, substitute var value e)
-  | substitute var value (Seq(e1, e2))    = Seq(substitute var value e1, substitute var value e2)
-  | substitute var value (Deref(l))       = Deref(l)
-  | substitute var value (Op(e1, oper, e2)) = Op(substitute var value e1, oper, substitute var value e2)
-  | substitute var value (Choice(e1, e2)) = Choice(substitute var value e1, substitute var value e2)
-  | substitute var value (Par(e1, e2))    = Par(substitute var value e1, substitute var value e2)
-  | substitute var value (Await(e1, e2))  = Await(substitute var value e1, substitute var value e2)
-
 (* Small-step operational semantics *)
 fun reduce (Integer n, s) = NONE
   | reduce (Boolean b, s) = NONE
-  | reduce (Fn (v, t, e), s) = NONE
-  | reduce (Var x, s) = NONE
   | reduce (Skip,s) = NONE
   | reduce (Op (e1, oper, e2), s) = 
     (case (e1, oper, e2) of
          (Integer n1, plus, Integer n2) => SOME(Integer (n1 + n2), s)   (*oper+*)
-       | (Integer n1, gt, Integer n2) => SOME(Boolean (n1 >= n2), s)    (*oper>=*)
+       | (Integer n1, ge, Integer n2) => SOME(Boolean (n1 >= n2), s)    (*oper>=*)
        | (e1, oper, e2) => (                                               
          if (value e1) then (                                        
              case reduce (e2, s) of 
@@ -125,20 +100,6 @@ fun reduce (Integer n, s) = NONE
       | _ => ( case reduce (e1, s) of                           
                  SOME (e1', s') => SOME(Seq (e1', e2), s')       
                | NONE => NONE ))
-  | reduce (App (f, e), s) = (
-    case (f, e) of
-        (Fn(x, t, body), e) => (
-          if (value e) then 
-            SOME(substitute x e body, s)
-          else
-            case reduce(e, s) of
-                SOME(e', s') => SOME(App(f, e'), s')
-              | NONE => NONE
-        )
-      | (f, e) =>
-            case reduce(f, s) of
-                SOME(f', s) => SOME(App(f', e), s)
-              | NONE => NONE)
   | reduce (Choice(e1, e2), s) = (
     let val randomValue = Random.random randomGenerator
         val goLeft = randomValue < 0.5
@@ -195,25 +156,10 @@ fun evaluate (e,s) = case reduce (e, s) of
 (* Typechecker *)
 fun infertype gamma (Integer n) = SOME mInt
   | infertype gamma (Boolean b) = SOME mBool
-  | infertype gamma (Var x) = (
-    case lookup(gamma, x) of
-        SOME t => SOME t
-      | NONE => NONE
-  )
-  | infertype gamma (Fn (x, t, e)) = (
-    case (infertype ((x, t)::gamma) e) of
-        SOME t1 => SOME (mFun(t, t1))
-      | NONE => NONE
-  )
-  | infertype gamma (App (e1, e2)) = (
-    case (infertype gamma e1, infertype gamma e2) of
-      (SOME(mFun(t, t1)), SOME t2) => if t = t2 then SOME t1 else NONE
-    | _ => NONE
-  )
   | infertype gamma (Op (e1, oper, e2)) 
     = (case (infertype gamma e1, oper, infertype gamma e2) of
           (SOME mInt, plus, SOME mInt) => SOME mInt
-        | (SOME mInt, gt, SOME mInt) => SOME mBool
+        | (SOME mInt, ge, SOME mInt) => SOME mBool
         | _ => NONE)
   | infertype gamma (If (g, e1, e2)) 
     = (case (infertype gamma g, infertype gamma e1, infertype gamma e2) of
@@ -259,18 +205,16 @@ fun infertype gamma (Integer n) = SOME mInt
 
 (* Pretty printer *)
 fun printOp plus = "+"
-  | printOp gt = ">="
+  | printOp ge = ">="
 
 fun printType (mInt) = "int"
   | printType (mBool) = "bool"
   | printType (mUnit) = "unit"
   | printType (mProc) = "proc"
   | printType (mRef(t)) = printType(t) ^ "ref"
-  | printType (mFun(t, t1)) = "(" ^ (printType t) ^ ") -> " ^ (printType t1)
                          
 fun printExp (Integer n) = Int.toString n
   | printExp (Boolean b) = Bool.toString b
-  | printExp (Var x) = x
   | printExp (Op (e1,oper,e2)) 
     = "(" ^ (printExp e1) ^ (printOp oper) 
       ^ (printExp e2) ^ ")"
@@ -284,8 +228,6 @@ fun printExp (Integer n) = Int.toString n
                                      ^ (printExp e2)
   | printExp (While (e1,e2)) =  "while " ^ (printExp e1 ) 
                                        ^ " do " ^ (printExp e2)
-  | printExp (Fn(x, t, e)) = "fn " ^ x ^ ": " ^ (printType t) ^ " => " ^ (printExp e)
-  | printExp (App(f, e)) = "(" ^ (printExp f) ^ ")" ^ "(" ^ (printExp e) ^ ")"
   | printExp (Choice(e1, e2)) = "(" ^ (printExp e1) ^ ") (+) (" ^ (printExp e2) ^ ")"
   | printExp (Par(e1, e2)) = "(" ^ (printExp e1) ^ ") || (" ^ (printExp e2) ^ ")"
   | printExp (Await(e1, e2)) = "await (" ^ (printExp e1) ^ ") protect (" ^ (printExp e2) ^ ")"

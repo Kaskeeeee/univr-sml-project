@@ -1,6 +1,8 @@
 # univr-sml-project
 
-Foundations of Programming Languages course project
+This repository contains **SML** code that implements a simple typechecker and
+the functions used to reproduce **small-step operational sematincs** and
+**big-step operational sematincs**.
 
 ## Usage
 
@@ -14,7 +16,7 @@ $ mosml
 - use "lang.sml";
 ```
 
-If you just want to see examples of some programs use instead:
+If you just want to see examples of some programs use:
 
 ```bash
 - use "examples.sml";
