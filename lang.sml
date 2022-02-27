@@ -2,6 +2,10 @@
 load "Int";
 load "Bool";
 load "Listsort";
+load "Random";
+
+(* Declaring random generator *)
+val randomGenerator = Random.newgen()
 
 (* Types and datatypes definition *)
 type loc = string
@@ -9,7 +13,8 @@ type var = string
 
 datatype langType =  mInt  
                     | mUnit  
-                    | mBool 
+                    | mBool
+                    | mProc
                     | mRef of langType
                     | mFun of langType * langType
 
@@ -30,6 +35,9 @@ datatype exp =
     |   Var of var
     |   Fn of var * langType * exp
     |   App of exp * exp
+    |   Choice of exp * exp
+    |   Par of exp * exp
+    |   Await of exp * exp
 
 
 (* Returns whether or not the passed argument is a value *)
@@ -68,6 +76,9 @@ fun substitute var value (Boolean b)      = Boolean b
   | substitute var value (Seq(e1, e2))    = Seq(substitute var value e1, substitute var value e2)
   | substitute var value (Deref(l))       = Deref(l)
   | substitute var value (Op(e1, oper, e2)) = Op(substitute var value e1, oper, substitute var value e2)
+  | substitute var value (Choice(e1, e2)) = Choice(substitute var value e1, substitute var value e2)
+  | substitute var value (Par(e1, e2))    = Par(substitute var value e1, substitute var value e2)
+  | substitute var value (Await(e1, e2))  = Await(substitute var value e1, substitute var value e2)
 
 (* Small-step operational semantics *)
 fun reduce (Integer n, s) = NONE
@@ -116,16 +127,65 @@ fun reduce (Integer n, s) = NONE
                | NONE => NONE ))
   | reduce (App (f, e), s) = (
     case (f, e) of
-        (Fn(x, t, body), Integer n) => SOME(substitute x (Integer n) body, s)
-        | (f, e) =>
-              if (value f) then
-                case reduce(e, s) of
-                    SOME(e', s') => SOME(App(f, e'), s)
-                  | NONE => NONE
-              else
-                case reduce(f, s) of
-                    SOME(f', s) => SOME(App(f', e), s)
-                  | NONE => NONE)
+        (Fn(x, t, body), e) => (
+          if (value e) then 
+            SOME(substitute x e body, s)
+          else
+            case reduce(e, s) of
+                SOME(e', s') => SOME(App(f, e'), s')
+              | NONE => NONE
+        )
+      | (f, e) =>
+            case reduce(f, s) of
+                SOME(f', s) => SOME(App(f', e), s)
+              | NONE => NONE)
+  | reduce (Choice(e1, e2), s) = (
+    let val randomValue = Random.random randomGenerator
+        val goLeft = randomValue < 0.5
+    in
+      if (goLeft) then
+        reduce(e1, s)
+      else
+        reduce(e2, s)
+    end
+  )
+  | reduce (Par(e1, e2), s) = (
+    let val randomValue = Random.random randomGenerator
+        val goLeft = randomValue < 0.5
+    in
+      if (goLeft) then
+        case e1 of
+           Skip => SOME(e2, s)
+          | _ => (
+            case reduce(e1, s) of 
+               SOME(e1', s') => SOME(Par(e1', e2), s')
+              | NONE => NONE
+          )
+        
+      else
+        case e2 of
+           Skip => SOME(e1, s)
+          | _ => (
+            case reduce(e2, s) of 
+               SOME(e2', s') => SOME(Par(e1, e2'), s')
+              | NONE => NONE
+          )
+    end
+  )
+  | reduce (Await(e1, e2), s) = (
+    let fun eval (e, s) = case reduce(e, s) of 
+                         NONE => (e, s)
+                       | SOME (e', s') => eval (e', s')
+    in
+        let val evaluatedGuard = eval(e1, s)
+        in
+          case evaluatedGuard of 
+              (Boolean(true), s') => SOME (eval(e2, s'))
+            | (Boolean(false), s') => SOME(Await(e1, e2), s')
+            | _ => NONE
+        end
+    end
+  )
 
 (* Big-step operational semantics *)
 fun evaluate (e,s) = case reduce (e, s) of 
@@ -176,7 +236,26 @@ fun infertype gamma (Integer n) = SOME mInt
   | infertype gamma (While (e1, e2)) 
     = (case (infertype gamma e1, infertype gamma e2) of
            (SOME mBool, SOME mUnit) => SOME mUnit 
-         | _ => NONE );
+         | _ => NONE )
+  | infertype gamma (Choice (e1, e2))
+    = (case (infertype gamma e1, infertype gamma e2) of
+            (SOME mUnit, SOME mUnit) => SOME mUnit
+          | _ => NONE)
+  | infertype gamma (Par (e1, e2))
+    = (
+      case (infertype gamma e1, infertype gamma e2) of
+           (SOME mUnit, SOME mUnit) => SOME mProc
+          | (SOME mUnit, SOME mProc) => SOME mProc
+          | (SOME mProc, SOME mUnit) => SOME mProc
+          | (SOME mProc, SOME mProc) => SOME mProc
+          | _ => NONE
+    )
+  | infertype gamma (Await (e1, e2))
+    = (
+      case (infertype gamma e1, infertype gamma e2) of
+          (SOME mBool, SOME mUnit) => SOME mUnit
+        | _ => NONE
+    )
 
 (* Pretty printer *)
 fun printOp plus = "+"
@@ -185,6 +264,7 @@ fun printOp plus = "+"
 fun printType (mInt) = "int"
   | printType (mBool) = "bool"
   | printType (mUnit) = "unit"
+  | printType (mProc) = "proc"
   | printType (mRef(t)) = printType(t) ^ "ref"
   | printType (mFun(t, t1)) = "(" ^ (printType t) ^ ") -> " ^ (printType t1)
                          
@@ -206,6 +286,9 @@ fun printExp (Integer n) = Int.toString n
                                        ^ " do " ^ (printExp e2)
   | printExp (Fn(x, t, e)) = "fn " ^ x ^ ": " ^ (printType t) ^ " => " ^ (printExp e)
   | printExp (App(f, e)) = "(" ^ (printExp f) ^ ")" ^ "(" ^ (printExp e) ^ ")"
+  | printExp (Choice(e1, e2)) = "(" ^ (printExp e1) ^ ") (+) (" ^ (printExp e2) ^ ")"
+  | printExp (Par(e1, e2)) = "(" ^ (printExp e1) ^ ") || (" ^ (printExp e2) ^ ")"
+  | printExp (Await(e1, e2)) = "await (" ^ (printExp e1) ^ ") protect (" ^ (printExp e2) ^ ")"
 
 
 fun printStore' [] = ""
@@ -227,13 +310,13 @@ fun printConf (e, s) = "< " ^ (printExp e)
 fun printReduce' (e, s) = 
     case reduce (e, s) of 
         SOME (e',s') => 
-        ( TextIO.print ("\n -->  " ^ printConf (e',s') ) ;
+        ( TextIO.print ("\n   -->  " ^ printConf (e',s') ) ;
           printReduce' (e',s'))
-      | NONE => (TextIO.print "\n -/->  " ; 
+      | NONE => (TextIO.print "\n  -/->  " ; 
                  if value e then 
                      TextIO.print "(a value)\n" 
                  else 
-                     TextIO.print "(stuck - not a value)" )
+                     TextIO.print "(stuck - not a value)\n" )
 
 fun printReduce (e, s) = (TextIO.print ("\t"^(printConf (e,s))) ;
                           printReduce' (e, s))
@@ -252,8 +335,7 @@ fun printGamma pairs =
     in
         "{ " ^ printGamma' pairs' ^ "}" end
 
-fun printTypecheck e NONE = (printTypecheck e (SOME []))
-  | printTypecheck e (SOME s) = (
+fun printTypecheck (e, s) = (
     TextIO.print ("> Expression: " ^ (printExp e) ^ "\n");
     let val gamma = generateGamma s in
       case infertype gamma e of
