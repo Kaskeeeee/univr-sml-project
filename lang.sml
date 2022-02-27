@@ -139,10 +139,19 @@ fun reduce (Integer n, s) = NONE
                        | SOME (e', s') => eval (e', s')
     in
         let val evaluatedGuard = eval(e1, s)
+            val evaluatedBody  = eval(e2, #2 evaluatedGuard)
         in
           case evaluatedGuard of 
-              (Boolean(true), s') => SOME (eval(e2, s'))
-            | (Boolean(false), s') => SOME(Await(e1, e2), s')
+              (Boolean(true), s') => (
+                case evaluatedBody of 
+                    (Skip, s'') => SOME (Skip, s'')
+                  | _ => NONE
+              )
+            | (Boolean(false), s') => (
+                case evaluatedBody of
+                    (Skip, s'') => SOME(Await(e1, e2), s')
+                  | _ => NONE
+              )
             | _ => NONE
         end
     end
