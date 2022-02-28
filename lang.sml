@@ -147,6 +147,19 @@ fun reduce (Integer n, s) = NONE
                     (Skip, s'') => SOME (Skip, s'')
                   | _ => NONE
               )
+            (* 
+              It has has been decided to add a rule
+              for the 'false' guard case, such that
+              instead of returning a non-valid program
+              waits for the guard to become true.
+
+              This is different from the rules used 
+              during the course. If it was necessary
+              to show the code that matches the exact
+              rule, that would be:
+
+              (Boolean(false), s') => NONE
+            *)
             | (Boolean(false), s') => (
                 case evaluatedBody of
                     (Skip, s'') => SOME(Await(e1, e2), s')
